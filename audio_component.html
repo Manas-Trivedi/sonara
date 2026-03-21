@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body { margin:0; font-family: sans-serif; background:#111; color:#eee; }
+  #enable {
+    width:100%; padding:14px; font-size:16px; background:#ff6600;
+    color:#fff; border:none; cursor:pointer; border-radius:6px;
+  }
+  #enable:active { background:#cc5200; }
+  #status { font-size:11px; padding:6px; color:#888; }
+</style>
+</head>
+<body>
+<button id="enable">🔊 Enable Audio + Haptics (tap here)</button>
+<div id="status">waiting for user gesture…</div>
+
+<script>
+(() => {
+  const POLL_MS   = 100;
+  const SMOOTH    = 0.08;   // setTargetAtTime time-constant (seconds)
+  const GAINS     = [0.6, 0.35, 0.15];
+  const DANGER_HZ = 1800;
+  const DANGER_COOLDOWN_MS = 600;
+
+  let ctx = null;
+  let voices = [];          // [{osc, gain, pan}] x3
+  let dangerOsc, dangerGain;
+  let lastDanger = 0;
+
+  const statusEl = document.getElementById('status');
+
+  function proximityToHz(p) {
+    // 0.0 -> 100Hz, 1.0 -> 1200Hz, linear
+    return 100 + p * 1100;
+  }
+  function xposToPan(x) {
+    // 0 -> -1, 1 -> +1
+    return (x * 2) - 1;
+  }
+
+  function initAudio() {
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+
+    // 3 continuous sine voices
+    for (let i = 0; i < 3; i++) {
+      const osc  = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const pan  = ctx.createStereoPanner();
+      osc.type = 'sine';
+      osc.frequency.value = 100;
+      gain.gain.value = 0;           // silent until an object appears
+      pan.pan.value = 0;
+      osc.connect(pan).connect(gain).connect(ctx.destination);
+      osc.start();
+      voices.push({osc, gain, pan});
+    }
+
+    // danger click voice (square), normally muted
+    dangerOsc  = ctx.createOscillator();
+    dangerGain = ctx.createGain();
+    dangerOsc.type = 'square';
+    dangerOsc.frequency.value = DANGER_HZ;
+    dangerGain.gain.value = 0;
+    dangerOsc.connect(dangerGain).connect(ctx.destination);
+    dangerOsc.start();
+  }
+
+  function fireDanger() {
+    const now = performance.now();
+    if (now - lastDanger < DANGER_COOLDOWN_MS) return;
+    lastDanger = now;
+
+    const t = ctx.currentTime;
+    dangerGain.gain.cancelScheduledValues(t);
+    dangerGain.gain.setValueAtTime(0.0, t);
+    dangerGain.gain.linearRampToValueAtTime(0.5, t + 0.005);
+    dangerGain.gain.linearRampToValueAtTime(0.0, t + 0.055); // 50ms burst
+
+    if (navigator.vibrate) {
+      navigator.vibrate([200, 100, 200]);
+    }
+  }
+
+  function applyScene(objects) {
+    const t = ctx.currentTime;
+    let danger = false;
+
+    for (let i = 0; i < 3; i++) {
+      const v = voices[i];
+      const o = objects[i];
+      if (o) {
+        v.osc.frequency.setTargetAtTime(proximityToHz(o.proximity), t, SMOOTH);
+        v.pan.pan.setTargetAtTime(xposToPan(o.x_pos), t, SMOOTH);
+        v.gain.gain.setTargetAtTime(GAINS[i], t, SMOOTH);
+        if (o.danger) danger = true;
+      } else {
+        v.gain.gain.setTargetAtTime(0, t, SMOOTH);
+      }
+    }
+
+    if (danger) fireDanger();
+
+    statusEl.textContent =
+      `objects: ${objects.length} | ` +
+      objects.map(o => `${o.label}@${o.distance_m.toFixed(1)}m`).join('  ');
+  }
+
+  async function poll() {
+    try {
+      // Streamlit static serving: file is written by app.py to ./static/scene.json
+      // Served at /app/static/scene.json relative to the app origin.
+      // We're inside an iframe on the same origin, so relative path works.
+      const r = await fetch('/app/static/scene.json?_=' + Date.now(),
+                            {cache: 'no-store'});
+      if (r.ok) {
+        const data = await r.json();
+        applyScene(data.objects || []);
+      }
+    } catch (e) {
+      // file may not exist yet on first frame — ignore
+    }
+  }
+
+  document.getElementById('enable').addEventListener('click', async () => {
+    if (!ctx) initAudio();
+    await ctx.resume();
+    // prime vibration with a tiny pulse so iOS/Android trust us
+    if (navigator.vibrate) navigator.vibrate(50);
+    document.getElementById('enable').textContent = '✓ Audio active';
+    document.getElementById('enable').style.background = '#2a7a2a';
+    statusEl.textContent = 'polling…';
+    setInterval(poll, POLL_MS);
+  });
+})();
+</script>
+</body>
+</html>
