@@ -27,10 +27,12 @@ class Detector:
         self.names = self.model.names
 
     def detect(self, frame_bgr: np.ndarray) -> list[dict]:
-        # imgsz left at default; frame is already pre-resized upstream
+        # Zone-level detection only needs ~320px — YOLO rescales bboxes
+        # back to input dimensions automatically.
         results = self.model.predict(
             frame_bgr,
             conf=self.conf_threshold,
+            imgsz=320,
             verbose=False,
         )
         out = []

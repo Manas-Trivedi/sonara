@@ -188,27 +188,46 @@ class Processor:
     def stop(self):
         self.running.clear()
 
+    DEPTH_EVERY = 3   # run MiDaS on 1 of every 3 frames
+    YOLO_EVERY = 2    # run YOLO on 1 of every 2 frames
+
     def _loop(self):
         frame_i = 0
         last_depth = None
+        last_dets: list[dict] = []
         t_prev = time.time()
 
+        # --- perf instrumentation ---
+        perf_acc = {"grab": 0.0, "resize": 0.0, "depth": 0.0, "yolo": 0.0,
+                    "scene": 0.0, "annotate": 0.0, "write": 0.0, "total": 0.0}
+        PERF_EVERY = 30
+
         while self.running.is_set():
+            t0 = time.perf_counter()
             raw = self.video_source.latest()
+            t1 = time.perf_counter()
             if raw is None:
                 time.sleep(0.05)
                 continue
 
             frame = cv2.resize(raw, (PROC_W, PROC_H))
+            t2 = time.perf_counter()
 
-            if frame_i % 2 == 0 or last_depth is None:
+            if frame_i % self.DEPTH_EVERY == 0 or last_depth is None:
                 last_depth = self.depth_model.estimate(frame)
             depth_map = last_depth
+            t3 = time.perf_counter()
 
-            detections = self.detector.detect(frame)
+            if frame_i % self.YOLO_EVERY == 0:
+                last_dets = self.detector.detect(frame)
+            detections = last_dets
+            t4 = time.perf_counter()
+
             objects = scene.analyze(depth_map, detections, PROC_W, PROC_H)
+            t5 = time.perf_counter()
 
             write_scene_json(objects)
+            t6 = time.perf_counter()
 
             annotated = render_annotated(frame, depth_map, objects)
 
@@ -218,7 +237,34 @@ class Processor:
             fps = 1.0 / dt if dt > 0 else 0.0
 
             self.buffer.set(annotated, objects, fps)
+            t7 = time.perf_counter()
+
+            perf_acc["grab"]     += (t1 - t0) * 1000
+            perf_acc["resize"]   += (t2 - t1) * 1000
+            perf_acc["depth"]    += (t3 - t2) * 1000
+            perf_acc["yolo"]     += (t4 - t3) * 1000
+            perf_acc["scene"]    += (t5 - t4) * 1000
+            perf_acc["write"]    += (t6 - t5) * 1000
+            perf_acc["annotate"] += (t7 - t6) * 1000
+            perf_acc["total"]    += (t7 - t0) * 1000
+
             frame_i += 1
+            if frame_i % PERF_EVERY == 0:
+                n = PERF_EVERY
+                avg_total = perf_acc["total"] / n
+                print(
+                    f"[PERF] grab={perf_acc['grab']/n:.0f}ms  "
+                    f"resize={perf_acc['resize']/n:.0f}ms  "
+                    f"depth={perf_acc['depth']/n:.0f}ms  "
+                    f"yolo={perf_acc['yolo']/n:.0f}ms  "
+                    f"scene={perf_acc['scene']/n:.0f}ms  "
+                    f"annotate={perf_acc['annotate']/n:.0f}ms  "
+                    f"write={perf_acc['write']/n:.0f}ms  "
+                    f"total={avg_total:.0f}ms → {1000/avg_total:.1f} FPS",
+                    flush=True,
+                )
+                for k in perf_acc:
+                    perf_acc[k] = 0.0
 
 
 @st.cache_resource

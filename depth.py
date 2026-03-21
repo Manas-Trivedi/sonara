@@ -1,7 +1,8 @@
 """
 MiDaS monocular depth estimation wrapper.
 
-Loads DPT_Large on CUDA if available, otherwise MiDaS_small on CPU.
+Always uses MiDaS_small (DPT_Large is too slow for real-time assistive use).
+Runs on CUDA > MPS > CPU, whichever is available.
 Output is normalized per-frame to 0-1 where 1 = NEAR (MiDaS outputs
 inverse depth — higher raw value means closer).
 """
@@ -11,21 +12,29 @@ import numpy as np
 import torch
 import cv2
 
+# Depth estimation does not need high resolution to tell a wall is close.
+# Downscaling before the MiDaS transform cuts inference time substantially.
+DEPTH_W, DEPTH_H = 256, 192
+
+
+def _pick_device() -> str:
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
 
 class DepthEstimator:
-    def __init__(self, force_small: bool = False):
-        self.device = "cuda" if torch.cuda.is_available() and not force_small else "cpu"
-        model_type = "DPT_Large" if self.device == "cuda" and not force_small else "MiDaS_small"
-        self.model_type = model_type
+    def __init__(self):
+        self.device = _pick_device()
+        self.model_type = "MiDaS_small"
 
-        self.model = torch.hub.load("intel-isl/MiDaS", model_type, trust_repo=True)
+        self.model = torch.hub.load("intel-isl/MiDaS", self.model_type, trust_repo=True)
         self.model.to(self.device).eval()
 
         transforms = torch.hub.load("intel-isl/MiDaS", "transforms", trust_repo=True)
-        if model_type == "MiDaS_small":
-            self.transform = transforms.small_transform
-        else:
-            self.transform = transforms.dpt_transform
+        self.transform = transforms.small_transform
 
     @torch.inference_mode()
     def estimate(self, frame_bgr: np.ndarray) -> np.ndarray:
@@ -37,7 +46,9 @@ class DepthEstimator:
             Same spatial dimensions as the input frame.
         """
         h, w = frame_bgr.shape[:2]
-        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        small = cv2.resize(frame_bgr, (DEPTH_W, DEPTH_H),
+                           interpolation=cv2.INTER_AREA)
+        rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
         inp = self.transform(rgb).to(self.device)
 
         pred = self.model(inp)
@@ -48,7 +59,7 @@ class DepthEstimator:
             align_corners=False,
         ).squeeze()
 
-        depth = pred.cpu().numpy().astype(np.float32)
+        depth = pred.detach().cpu().numpy().astype(np.float32)
 
         # Per-frame min-max normalize. MiDaS inverse depth: high = close.
         dmin, dmax = depth.min(), depth.max()
