@@ -1,3 +1,4 @@
 claude-hfi
 venv
 __pycache__
+.certs/
