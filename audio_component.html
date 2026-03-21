@@ -17,18 +17,18 @@
 
 <script>
 (() => {
-  const POLL_MS     = 100;
-  const SMOOTH      = 0.06;   // setTargetAtTime time-constant (seconds)
-  const VOICE_GAINS = [0.38, 0.26, 0.18];
-  const MASTER_GAIN = 0.4;
-  const ACTIVE_MIN  = 0.15;   // zones below this proximity stay silent
-  const DANGER_HZ   = 1800;
-  const DANGER_GAIN = 0.3;
+  const POLL_MS          = 100;
+  const SMOOTH           = 0.06;   // setTargetAtTime time-constant (seconds)
+  const VOICE_GAINS      = [0.38, 0.26, 0.18];
+  const MASTER_GAIN      = 0.4;
+  const ACTIVE_MIN       = 0.40;   // zones below this proximity stay silent (~3m+)
+  const DANGER_HZ        = 1800;
+  const DANGER_GAIN      = 0.3;
   const DANGER_COOLDOWN_MS = 600;
 
   let ctx = null;
   let master, compressor;
-  let voices = [];          // [{osc, gain, pan}] x3
+  let voices = [];   // [{osc, gain, pan}] x3
   let dangerOsc, dangerGain;
   let lastDanger = 0;
 
@@ -38,41 +38,14 @@
     return 100 + p * 1100;   // 0.0 -> 100Hz, 1.0 -> 1200Hz
   }
 
-  function zoneToPosition(zone, level, proximity) {
-    // Push sources wider and pull near objects much closer to exaggerate
-    // left/right and near/far cues for obstacle avoidance.
-    const depthCurve = Math.pow(1 - proximity, 1.8);
-    const distance = 0.18 + depthCurve * 8;
-    const x = zone === "left" ? -3.2 : zone === "right" ? 3.2 : 0;
-    const y = level === "upper" ? 1.2 : -1.0;
-    const z = -distance;   // negative Z = in front of listener
-    return { x, y, z };
-  }
-
-  function makePanner() {
-    const p = ctx.createPanner();
-    p.panningModel   = 'HRTF';
-    p.distanceModel  = 'inverse';
-    p.refDistance    = 0.2;
-    p.maxDistance    = 24;
-    p.rolloffFactor  = 1.8;
-    p.coneInnerAngle = 360;
-    p.coneOuterAngle = 0;
-    p.coneOuterGain  = 0;
-    return p;
+  function zoneToPan(zone) {
+    if (zone === "left")  return -0.85;
+    if (zone === "right") return  0.85;
+    return 0;  // center
   }
 
   function initAudio() {
     ctx = new (window.AudioContext || window.webkitAudioContext)();
-
-    // Listener faces forward (-Z)
-    const L = ctx.listener;
-    if (L.forwardX) {
-      L.forwardX.value = 0; L.forwardY.value = 0; L.forwardZ.value = -1;
-      L.upX.value = 0;      L.upY.value = 1;      L.upZ.value = 0;
-    } else if (L.setOrientation) {
-      L.setOrientation(0, 0, -1, 0, 1, 0);
-    }
 
     // Output chain: compressor -> master gain -> destination
     compressor = ctx.createDynamicsCompressor();
@@ -87,20 +60,21 @@
 
     compressor.connect(master).connect(ctx.destination);
 
-    // 3 continuous sine voices: osc -> gain -> HRTF panner -> compressor
+    // 3 continuous voices: osc -> gain -> StereoPanner -> compressor
     for (let i = 0; i < 3; i++) {
       const osc  = ctx.createOscillator();
       const gain = ctx.createGain();
-      const pan  = makePanner();
+      const pan  = ctx.createStereoPanner();
       osc.type = i === 0 ? 'triangle' : 'sine';
       osc.frequency.value = 100;
       gain.gain.value = 0;
+      pan.pan.value = 0;
       osc.connect(gain).connect(pan).connect(compressor);
       osc.start();
       voices.push({ osc, gain, pan });
     }
 
-    // Danger click (square), routed through the same compressor/master
+    // Danger click (square), unpanned, routed directly to compressor
     dangerOsc  = ctx.createOscillator();
     dangerGain = ctx.createGain();
     dangerOsc.type = 'square';
@@ -108,16 +82,6 @@
     dangerGain.gain.value = 0;
     dangerOsc.connect(dangerGain).connect(compressor);
     dangerOsc.start();
-  }
-
-  function setPannerPosition(pan, pos, t) {
-    if (pan.positionX) {
-      pan.positionX.setTargetAtTime(pos.x, t, SMOOTH);
-      pan.positionY.setTargetAtTime(pos.y, t, SMOOTH);
-      pan.positionZ.setTargetAtTime(pos.z, t, SMOOTH);
-    } else {
-      pan.setPosition(pos.x, pos.y, pos.z);
-    }
   }
 
   function fireDanger() {
@@ -146,7 +110,7 @@
       const z = active[i];
       if (z) {
         v.osc.frequency.setTargetAtTime(proximityToHz(z.proximity), t, SMOOTH);
-        setPannerPosition(v.pan, zoneToPosition(z.zone, z.level, z.proximity), t);
+        v.pan.pan.setTargetAtTime(zoneToPan(z.zone), t, SMOOTH);
         v.gain.gain.setTargetAtTime(VOICE_GAINS[i], t, SMOOTH);
         if (z.danger) danger = true;
       } else {
