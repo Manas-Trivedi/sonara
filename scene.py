@@ -1,31 +1,36 @@
 """
-Scene analysis: fuse depth map + object detections into a ranked list of
-nearby objects. This is the single source of truth for the data contract
-consumed by both the video overlay and the audio/haptic JS component.
+Scene analysis: depth-map-first obstacle detection.
 
-DATA CONTRACT (each object in the returned list):
+The depth map is divided into a 3x2 grid (left/center/right x upper/lower).
+Each cell's 95th-percentile depth value becomes a proximity reading. YOLO
+detections are optional context — if a detection's center falls inside a
+cell, its label is attached. If YOLO sees nothing, the grid still fires.
+
+DATA CONTRACT (each zone dict in the returned list):
 {
-    "label":      str,    # YOLO class name, e.g. "person"
-    "proximity":  float,  # 0.0 (far, ~5m+) -> 1.0 (very close, <0.2m)
-    "x_pos":      float,  # 0.0 (far left) -> 1.0 (far right)
-    "distance_m": float,  # derived human-readable distance in meters
-    "bbox":       [x1, y1, x2, y2],  # pixel coords in the *processed* frame
+    "zone":       str,    # "left" | "center" | "right"
+    "level":      str,    # "upper" | "lower"
+    "proximity":  float,  # 0.0 (far) -> 1.0 (very close)
+    "distance_m": float,  # (1 - proximity) * 5, clamped 0.2–5.0
+    "label":      str|None,  # YOLO class if a detection overlaps, else None
+    "bbox":       [x1,y1,x2,y2],  # grid-cell pixel bounds (for overlay)
     "danger":     bool    # proximity > DANGER_THRESHOLD
 }
-The list is sorted by proximity descending and truncated to TOP_K.
+Always returns exactly 6 zones (all cells), sorted by proximity descending.
 """
 
 from __future__ import annotations
 import numpy as np
 
-TOP_K = 3
 DANGER_THRESHOLD = 0.75
 MAX_DISTANCE_M = 5.0
 MIN_DISTANCE_M = 0.2
 
+COLS = ("left", "center", "right")
+ROWS = ("upper", "lower")
+
 
 def proximity_to_meters(proximity: float) -> float:
-    """Linear inverse mapping. Clamped to [MIN, MAX]."""
     d = (1.0 - proximity) * MAX_DISTANCE_M
     return float(np.clip(d, MIN_DISTANCE_M, MAX_DISTANCE_M))
 
@@ -39,82 +44,98 @@ def analyze(
     """
     Args:
         depth_map: (H, W) float32, normalized 0-1, 1 = NEAR (MiDaS inverse depth).
-                   Must be same resolution as the frame detections were run on.
-        detections: list of {"label": str, "conf": float, "bbox": (x1,y1,x2,y2)}
-                    bbox in pixel coords matching depth_map dimensions.
+        detections: list of {"label": str, "conf": float, "bbox": (x1,y1,x2,y2)}.
+                    May be empty — grid still produces output.
         frame_w, frame_h: dimensions of the processed frame.
 
     Returns:
-        Top-K objects sorted by proximity (closest first). May be fewer than K.
+        6 zone dicts sorted by proximity descending.
     """
-    if depth_map is None or len(detections) == 0:
+    if depth_map is None:
         return []
 
     dh, dw = depth_map.shape[:2]
-    results = []
+    col_edges = [0, dw // 3, 2 * dw // 3, dw]
+    row_edges = [0, dh // 2, dh]
 
+    zones = []
+    for ri, level in enumerate(ROWS):
+        y1, y2 = row_edges[ri], row_edges[ri + 1]
+        for ci, zone in enumerate(COLS):
+            x1, x2 = col_edges[ci], col_edges[ci + 1]
+
+            cell = depth_map[y1:y2, x1:x2]
+            proximity = float(np.clip(np.percentile(cell, 95), 0.0, 1.0))
+
+            zones.append({
+                "zone": zone,
+                "level": level,
+                "proximity": proximity,
+                "distance_m": proximity_to_meters(proximity),
+                "label": None,
+                "bbox": [int(x1), int(y1), int(x2), int(y2)],
+                "danger": proximity > DANGER_THRESHOLD,
+                "_conf": -1.0,  # internal: best YOLO conf seen in this cell
+            })
+
+    # Attach YOLO labels: detection center → containing cell.
     for det in detections:
-        x1, y1, x2, y2 = det["bbox"]
+        bx1, by1, bx2, by2 = det["bbox"]
+        cx = (bx1 + bx2) / 2.0
+        cy = (by1 + by2) / 2.0
 
-        # Clamp bbox to depth map bounds and ensure non-empty
-        x1c = int(np.clip(x1, 0, dw - 1))
-        y1c = int(np.clip(y1, 0, dh - 1))
-        x2c = int(np.clip(x2, x1c + 1, dw))
-        y2c = int(np.clip(y2, y1c + 1, dh))
+        ci = 0 if cx < col_edges[1] else 1 if cx < col_edges[2] else 2
+        ri = 0 if cy < row_edges[1] else 1
+        z = zones[ri * 3 + ci]
 
-        region = depth_map[y1c:y2c, x1c:x2c]
-        if region.size == 0:
-            continue
+        if det["conf"] > z["_conf"]:
+            z["_conf"] = det["conf"]
+            z["label"] = det["label"]
 
-        # Use a high percentile instead of plain mean so that a small close
-        # object inside a large box (e.g. a pole against far background)
-        # still registers as close. Cheap and robust.
-        proximity = float(np.percentile(region, 85))
-        proximity = float(np.clip(proximity, 0.0, 1.0))
+    for z in zones:
+        del z["_conf"]
 
-        cx = (x1 + x2) / 2.0
-        x_pos = float(np.clip(cx / frame_w, 0.0, 1.0))
-
-        results.append({
-            "label": det["label"],
-            "proximity": proximity,
-            "x_pos": x_pos,
-            "distance_m": proximity_to_meters(proximity),
-            "bbox": [int(x1), int(y1), int(x2), int(y2)],
-            "danger": proximity > DANGER_THRESHOLD,
-        })
-
-    results.sort(key=lambda o: o["proximity"], reverse=True)
-    return results[:TOP_K]
+    zones.sort(key=lambda z: z["proximity"], reverse=True)
+    return zones
 
 
 # ---------------------------------------------------------------------------
-# Mock-data smoke test — run `python scene.py` before wiring anything else.
+# Mock-data smoke test — run `python scene.py`
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import json
 
     H, W = 288, 384
 
-    # Synthetic depth: left half far (0.1), right half near (0.9),
-    # with a very-near blob in the top-right corner.
+    # Synthetic depth: mostly far (0.1), with a near wall on the right (0.85)
+    # and a very-near blob in upper-right.
     depth = np.full((H, W), 0.1, dtype=np.float32)
-    depth[:, W // 2:] = 0.9
-    depth[0:80, W - 100:W] = 0.98
+    depth[:, 2 * W // 3:] = 0.85
+    depth[0:80, W - 100:W] = 0.97
 
     mock_dets = [
-        {"label": "person", "conf": 0.92, "bbox": (10, 50, 120, 250)},      # left / far
-        {"label": "chair",  "conf": 0.80, "bbox": (200, 100, 300, 260)},    # right / near
-        {"label": "bottle", "conf": 0.70, "bbox": (W - 90, 10, W - 10, 70)},# top-right / very near
-        {"label": "tv",     "conf": 0.60, "bbox": (150, 150, 190, 190)},    # mid / should rank last
+        {"label": "person", "conf": 0.92, "bbox": (10, 50, 120, 250)},      # left
+        {"label": "chair",  "conf": 0.80, "bbox": (W - 90, 160, W - 10, 270)},  # lower-right
+        {"label": "bottle", "conf": 0.40, "bbox": (W - 80, 170, W - 20, 260)},  # lower-right, lower conf
     ]
 
     out = analyze(depth, mock_dets, W, H)
     print(json.dumps(out, indent=2))
 
-    assert len(out) == 3, "Expected top-3 truncation"
-    assert out[0]["label"] == "bottle", f"Closest should be bottle, got {out[0]['label']}"
-    assert out[0]["danger"] is True, "Bottle should be in danger zone"
-    assert out[0]["x_pos"] > 0.7, "Bottle should be on the right"
-    assert out[-1]["proximity"] < out[0]["proximity"], "List must be sorted desc"
+    assert len(out) == 6, f"Expected 6 zones, got {len(out)}"
+    assert out[0]["zone"] == "right" and out[0]["level"] == "upper", \
+        f"Closest should be upper-right, got {out[0]['zone']}/{out[0]['level']}"
+    assert out[0]["danger"] is True, "Upper-right should be in danger zone"
+    assert out[0]["label"] is None, "Upper-right has no YOLO detection"
+
+    # lower-right should have the chair label (higher conf than bottle)
+    lower_right = next(z for z in out if z["zone"] == "right" and z["level"] == "lower")
+    assert lower_right["label"] == "chair", f"Expected chair, got {lower_right['label']}"
+    assert lower_right["proximity"] > 0.3, "Lower-right wall should register"
+
+    # Grid still fires with zero detections
+    out_empty = analyze(depth, [], W, H)
+    assert len(out_empty) == 6, "Grid must produce 6 zones even with no detections"
+    assert out_empty[0]["proximity"] > 0.3, "Wall must still be detected without YOLO"
+
     print("\n✓ scene.py mock test passed")

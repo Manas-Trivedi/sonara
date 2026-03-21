@@ -17,13 +17,17 @@
 
 <script>
 (() => {
-  const POLL_MS   = 100;
-  const SMOOTH    = 0.08;   // setTargetAtTime time-constant (seconds)
-  const GAINS     = [0.6, 0.35, 0.15];
-  const DANGER_HZ = 1800;
+  const POLL_MS     = 100;
+  const SMOOTH      = 0.06;   // setTargetAtTime time-constant (seconds)
+  const VOICE_GAINS = [0.38, 0.26, 0.18];
+  const MASTER_GAIN = 0.4;
+  const ACTIVE_MIN  = 0.15;   // zones below this proximity stay silent
+  const DANGER_HZ   = 1800;
+  const DANGER_GAIN = 0.3;
   const DANGER_COOLDOWN_MS = 600;
 
   let ctx = null;
+  let master, compressor;
   let voices = [];          // [{osc, gain, pan}] x3
   let dangerOsc, dangerGain;
   let lastDanger = 0;
@@ -31,39 +35,89 @@
   const statusEl = document.getElementById('status');
 
   function proximityToHz(p) {
-    // 0.0 -> 100Hz, 1.0 -> 1200Hz, linear
-    return 100 + p * 1100;
+    return 100 + p * 1100;   // 0.0 -> 100Hz, 1.0 -> 1200Hz
   }
-  function xposToPan(x) {
-    // 0 -> -1, 1 -> +1
-    return (x * 2) - 1;
+
+  function zoneToPosition(zone, level, proximity) {
+    // Push sources wider and pull near objects much closer to exaggerate
+    // left/right and near/far cues for obstacle avoidance.
+    const depthCurve = Math.pow(1 - proximity, 1.8);
+    const distance = 0.18 + depthCurve * 8;
+    const x = zone === "left" ? -3.2 : zone === "right" ? 3.2 : 0;
+    const y = level === "upper" ? 1.2 : -1.0;
+    const z = -distance;   // negative Z = in front of listener
+    return { x, y, z };
+  }
+
+  function makePanner() {
+    const p = ctx.createPanner();
+    p.panningModel   = 'HRTF';
+    p.distanceModel  = 'inverse';
+    p.refDistance    = 0.2;
+    p.maxDistance    = 24;
+    p.rolloffFactor  = 1.8;
+    p.coneInnerAngle = 360;
+    p.coneOuterAngle = 0;
+    p.coneOuterGain  = 0;
+    return p;
   }
 
   function initAudio() {
     ctx = new (window.AudioContext || window.webkitAudioContext)();
 
-    // 3 continuous sine voices
+    // Listener faces forward (-Z)
+    const L = ctx.listener;
+    if (L.forwardX) {
+      L.forwardX.value = 0; L.forwardY.value = 0; L.forwardZ.value = -1;
+      L.upX.value = 0;      L.upY.value = 1;      L.upZ.value = 0;
+    } else if (L.setOrientation) {
+      L.setOrientation(0, 0, -1, 0, 1, 0);
+    }
+
+    // Output chain: compressor -> master gain -> destination
+    compressor = ctx.createDynamicsCompressor();
+    compressor.threshold.value = -18;
+    compressor.knee.value      = 6;
+    compressor.ratio.value     = 4;
+    compressor.attack.value    = 0.003;
+    compressor.release.value   = 0.25;
+
+    master = ctx.createGain();
+    master.gain.value = MASTER_GAIN;
+
+    compressor.connect(master).connect(ctx.destination);
+
+    // 3 continuous sine voices: osc -> gain -> HRTF panner -> compressor
     for (let i = 0; i < 3; i++) {
       const osc  = ctx.createOscillator();
       const gain = ctx.createGain();
-      const pan  = ctx.createStereoPanner();
-      osc.type = 'sine';
+      const pan  = makePanner();
+      osc.type = i === 0 ? 'triangle' : 'sine';
       osc.frequency.value = 100;
-      gain.gain.value = 0;           // silent until an object appears
-      pan.pan.value = 0;
-      osc.connect(pan).connect(gain).connect(ctx.destination);
+      gain.gain.value = 0;
+      osc.connect(gain).connect(pan).connect(compressor);
       osc.start();
-      voices.push({osc, gain, pan});
+      voices.push({ osc, gain, pan });
     }
 
-    // danger click voice (square), normally muted
+    // Danger click (square), routed through the same compressor/master
     dangerOsc  = ctx.createOscillator();
     dangerGain = ctx.createGain();
     dangerOsc.type = 'square';
     dangerOsc.frequency.value = DANGER_HZ;
     dangerGain.gain.value = 0;
-    dangerOsc.connect(dangerGain).connect(ctx.destination);
+    dangerOsc.connect(dangerGain).connect(compressor);
     dangerOsc.start();
+  }
+
+  function setPannerPosition(pan, pos, t) {
+    if (pan.positionX) {
+      pan.positionX.setTargetAtTime(pos.x, t, SMOOTH);
+      pan.positionY.setTargetAtTime(pos.y, t, SMOOTH);
+      pan.positionZ.setTargetAtTime(pos.z, t, SMOOTH);
+    } else {
+      pan.setPosition(pos.x, pos.y, pos.z);
+    }
   }
 
   function fireDanger() {
@@ -74,26 +128,27 @@
     const t = ctx.currentTime;
     dangerGain.gain.cancelScheduledValues(t);
     dangerGain.gain.setValueAtTime(0.0, t);
-    dangerGain.gain.linearRampToValueAtTime(0.5, t + 0.005);
-    dangerGain.gain.linearRampToValueAtTime(0.0, t + 0.055); // 50ms burst
+    dangerGain.gain.linearRampToValueAtTime(DANGER_GAIN, t + 0.005);
+    dangerGain.gain.linearRampToValueAtTime(0.0, t + 0.055);
 
-    if (navigator.vibrate) {
-      navigator.vibrate([200, 100, 200]);
-    }
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
   }
 
-  function applyScene(objects) {
+  function applyScene(zones) {
     const t = ctx.currentTime;
+
+    // Only sonify zones above threshold; already sorted by proximity desc.
+    const active = zones.filter(z => z.proximity > ACTIVE_MIN).slice(0, 3);
     let danger = false;
 
     for (let i = 0; i < 3; i++) {
       const v = voices[i];
-      const o = objects[i];
-      if (o) {
-        v.osc.frequency.setTargetAtTime(proximityToHz(o.proximity), t, SMOOTH);
-        v.pan.pan.setTargetAtTime(xposToPan(o.x_pos), t, SMOOTH);
-        v.gain.gain.setTargetAtTime(GAINS[i], t, SMOOTH);
-        if (o.danger) danger = true;
+      const z = active[i];
+      if (z) {
+        v.osc.frequency.setTargetAtTime(proximityToHz(z.proximity), t, SMOOTH);
+        setPannerPosition(v.pan, zoneToPosition(z.zone, z.level, z.proximity), t);
+        v.gain.gain.setTargetAtTime(VOICE_GAINS[i], t, SMOOTH);
+        if (z.danger) danger = true;
       } else {
         v.gain.gain.setTargetAtTime(0, t, SMOOTH);
       }
@@ -102,30 +157,27 @@
     if (danger) fireDanger();
 
     statusEl.textContent =
-      `objects: ${objects.length} | ` +
-      objects.map(o => `${o.label}@${o.distance_m.toFixed(1)}m`).join('  ');
+      `active: ${active.length}/6 | ` +
+      active.map(z => `${z.label || z.zone}-${z.level}@${z.distance_m.toFixed(1)}m`)
+            .join('  ');
   }
 
   async function poll() {
     try {
-      // Streamlit static serving: file is written by app.py to ./static/scene.json
-      // Served at /app/static/scene.json relative to the app origin.
-      // We're inside an iframe on the same origin, so relative path works.
       const r = await fetch('/app/static/scene.json?_=' + Date.now(),
-                            {cache: 'no-store'});
+                            { cache: 'no-store' });
       if (r.ok) {
         const data = await r.json();
         applyScene(data.objects || []);
       }
     } catch (e) {
-      // file may not exist yet on first frame — ignore
+      // file may not exist yet — ignore
     }
   }
 
   document.getElementById('enable').addEventListener('click', async () => {
     if (!ctx) initAudio();
     await ctx.resume();
-    // prime vibration with a tiny pulse so iOS/Android trust us
     if (navigator.vibrate) navigator.vibrate(50);
     document.getElementById('enable').textContent = '✓ Audio active';
     document.getElementById('enable').style.background = '#2a7a2a';
