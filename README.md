@@ -12,8 +12,8 @@ Built for a 24-hour hackathon. Prioritises *working* over *pretty*.
 ## How it works
 
 ```
-Phone camera ──WiFi──▶ Laptop (MiDaS + YOLOv8n) ──WiFi──▶ Phone browser
-   (IP Webcam)              depth + detection            (audio + vibration)
+Phone camera ──WiFi/Browser──▶ Laptop (MiDaS + YOLOv8n) ──WiFi──▶ Phone browser
+ (IP Webcam or website camera)     depth + detection         (audio + vibration)
 ```
 
 - **MiDaS** gives per-pixel depth from a single RGB frame
@@ -28,13 +28,24 @@ Phone camera ──WiFi──▶ Laptop (MiDaS + YOLOv8n) ──WiFi──▶ Ph
 
 ## Setup
 
-### 1. Phone camera → laptop
+### 1. Choose a camera source
 
-**Android:** install [IP Webcam](https://play.google.com/store/apps/details?id=com.pas.webcam).
-Open it → scroll down → **Start server**. Note the URL it shows
-(e.g. `http://192.168.1.42:8080`). The video stream is at `…/video`.
+You now have two ways to feed video into Sonara:
 
-**iPhone:** install EpocCam or any app that exposes an MJPEG URL. Same idea.
+**Option A: IP Webcam / MJPEG app**
+
+- **Android:** install [IP Webcam](https://play.google.com/store/apps/details?id=com.pas.webcam).
+  Open it → scroll down → **Start server**. Note the URL it shows
+  (e.g. `http://192.168.1.42:8080`). The video stream is at `…/video`.
+- **iPhone:** use any app that exposes an MJPEG URL. Same idea.
+
+**Option B: Use the website directly on your phone**
+
+- Open Sonara in the phone browser.
+- Switch **Video Source** to **This device camera**.
+- Tap **Run** and allow camera access when the browser asks.
+- Sonara will upload frames from the browser camera to the laptop for processing.
+- Note: many mobile browsers only allow this on **HTTPS** (or `localhost`), so plain LAN `http://...` may still require IP Webcam.
 
 ### 2. Same WiFi
 
@@ -59,6 +70,16 @@ streamlit run app.py --server.address=0.0.0.0
 
 Streamlit prints a **Network URL** like `http://192.168.1.10:8501`.
 
+If you want to use **This device camera** in the browser, plain LAN `http://`
+is often not enough on mobile. In that case run Streamlit over **HTTPS**:
+
+```bash
+streamlit run app.py \
+  --server.address=0.0.0.0 \
+  --server.sslCertFile=/path/to/cert.pem \
+  --server.sslKeyFile=/path/to/key.pem
+```
+
 ### 5. Open on the **phone**, not the laptop
 
 This is the important bit. The **Vibration API only vibrates the device
@@ -66,7 +87,9 @@ running the browser**. So:
 
 1. On the **phone**, open Chrome/Firefox and go to the Network URL from step 4.
 2. Tap the orange **Enable Audio + Haptics** button.
-3. In the sidebar, paste your IP Webcam URL (ending in `/video`) and hit **▶ Run**.
+3. Pick a source:
+   - **IP Webcam feed**: paste the MJPEG URL (ending in `/video`) and turn on **Start Camera Processing** in the sidebar.
+   - **This device camera**: switch modes, turn on **Start Camera Processing** in the sidebar, then allow camera access.
 
 Keep the laptop browser open too if you want judges to see the annotated
 video feed on a big screen — audio/haptics just won't fire there.
@@ -96,3 +119,6 @@ video feed on a big screen — audio/haptics just won't fire there.
   if still slow, edit `depth.py` and pass `force_small=True`.
 - **Can't reach the stream?** `curl http://<phone-ip>:8080/video` from the
   laptop. If that fails, it's a network problem, not a code problem.
+- **Device camera mode shows permission errors?** The phone browser must allow
+  camera access, the page still needs to reach the laptop on the local network,
+  and some browsers require **HTTPS** before `getUserMedia()` will work.
