@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sonara</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:      #0a0a0a;
+    --surface: #111118;
+    --accent:  #6c63ff;
+    --danger:  #ff4757;
+    --text:    #f0f0f0;
+    --muted:   rgba(255,255,255,0.4);
+    --border:  rgba(255,255,255,0.06);
+    --radius:  12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', -apple-system, sans-serif;
+    font-size: 14px;
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
+  }
+  body { padding: 12px; padding-bottom: 32px; }
+
+  /* ---------- header ---------- */
+  header {
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 600;
+    font-size: 15px;
+    letter-spacing: 0.5px;
+  }
+  .dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: background-color 0.2s;
+  }
+  .dot.running {
+    background: var(--accent);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  #fps {
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 12px;
+    background: var(--surface);
+    border-radius: 20px;
+    padding: 4px 10px;
+    color: var(--muted);
+  }
+
+  /* ---------- feed ---------- */
+  #feed {
+    width: 100%;
+    aspect-ratio: 16/9;
+    object-fit: cover;
+    border-radius: var(--radius);
+    background: #000;
+    display: block;
+    margin-bottom: 14px;
+  }
+
+  /* ---------- CTA button ---------- */
+  #startBtn {
+    width: 100%;
+    height: 52px;
+    border: none;
+    border-radius: var(--radius);
+    background: var(--accent);
+    color: #fff;
+    font-family: inherit;
+    font-size: 16px;
+    font-weight: 500;
+    cursor: pointer;
+    margin-bottom: 20px;
+    transition: background-color 0.15s;
+  }
+  #startBtn:active { transform: scale(0.99); }
+  #startBtn.running {
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    animation: borderPulse 2s ease-in-out infinite;
+  }
+  @keyframes borderPulse {
+    0%,100% { border-color: var(--accent); }
+    50%     { border-color: rgba(108,99,255,0.3); }
+  }
+
+  /* ---------- sections ---------- */
+  .section { margin-bottom: 20px; }
+  .section-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.2px;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+  .section-head .count { font-weight: 400; letter-spacing: 0; }
+
+  /* ---------- source pills ---------- */
+  .pills { display: flex; gap: 8px; }
+  .pill {
+    flex: 1;
+    padding: 10px;
+    border: none;
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background-color 0.15s, color 0.15s;
+  }
+  .pill.active { background: var(--accent); color: #fff; }
+  #urlWrap {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.25s ease;
+    display: flex;
+    gap: 8px;
+    margin-top: 0;
+  }
+  #urlWrap.open { max-height: 60px; margin-top: 10px; }
+  #urlInput {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+  }
+  #urlInput:focus { outline: none; border-color: var(--accent); }
+  #urlConfirm {
+    width: 44px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--accent);
+    font-size: 16px;
+    cursor: pointer;
+  }
+
+  /* ---------- zones ---------- */
+  .zone { margin-bottom: 12px; }
+  .zone-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+    margin-bottom: 5px;
+  }
+  .zone-name { color: var(--muted); }
+  .zone-meta { display: flex; gap: 8px; align-items: center; }
+  .zone-label {
+    font-size: 10px;
+    padding: 2px 8px;
+    background: var(--surface);
+    border-radius: 10px;
+    color: var(--text);
+  }
+  .zone-dist {
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    color: var(--text);
+    min-width: 42px;
+    text-align: right;
+  }
+  .zone-bar {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--border);
+    overflow: hidden;
+  }
+  .zone-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--accent);
+    border-radius: 3px;
+    transition: width 0.15s ease, background-color 0.15s ease;
+  }
+
+  /* ---------- quantum toggle ---------- */
+  .toggle-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 0;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .toggle-row .left { display: flex; flex-direction: column; gap: 3px; }
+  .toggle-row .title { font-size: 14px; }
+  .toggle-row .sub { font-size: 11px; color: var(--muted); }
+  .switch { position: relative; width: 48px; height: 28px; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider {
+    position: absolute; inset: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    transition: background-color 0.2s;
+    cursor: pointer;
+  }
+  .slider::after {
+    content: "";
+    position: absolute;
+    width: 22px; height: 22px;
+    left: 2px; top: 2px;
+    background: var(--muted);
+    border-radius: 50%;
+    transition: transform 0.2s, background-color 0.2s;
+  }
+  .switch input:checked + .slider { background: var(--accent); border-color: var(--accent); }
+  .switch input:checked + .slider::after { transform: translateX(20px); background: #fff; }
+
+  /* ---------- status line ---------- */
+  #status {
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 14px;
+    min-height: 14px;
+    word-break: break-word;
+  }
+
+  /* ---------- overlay ---------- */
+  #overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    transition: opacity 0.4s ease;
+  }
+  #overlay.hidden { opacity: 0; pointer-events: none; }
+  #overlay .logo-dot {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: pulse 2s ease-in-out infinite;
+    margin-bottom: 8px;
+  }
+  #overlay .title { font-size: 20px; font-weight: 600; letter-spacing: 2px; }
+  #overlay .sub { font-size: 12px; color: var(--muted); margin-bottom: 32px; }
+  #overlay button {
+    padding: 14px 40px;
+    border: 1px solid var(--accent);
+    background: transparent;
+    color: var(--text);
+    border-radius: var(--radius);
+    font-family: inherit;
+    font-size: 15px;
+    cursor: pointer;
+  }
+  #overlay button:active { background: var(--accent); }
+</style>
+</head>
+<body>
+
+<!-- hidden phone camera element — feeds canvas, never shown -->
+<video id="cam" playsinline autoplay muted style="display:none"></video>
+
+<header>
+  <div class="brand">
+    <span class="dot" id="runDot"></span>
+    <span>SONARA</span>
+  </div>
+  <span id="fps">-- fps</span>
+</header>
+
+<img id="feed" src="/stream" alt="annotated feed">
+
+<button id="startBtn">▶&nbsp;&nbsp;Start</button>
+
+<div class="section">
+  <div class="section-head"><span>SOURCE</span></div>
+  <div class="pills">
+    <button class="pill active" data-source="browser_camera">📱 Phone camera</button>
+    <button class="pill" data-source="ip_webcam">🔗 IP Webcam</button>
+  </div>
+  <div id="urlWrap">
+    <input id="urlInput" type="text" placeholder="http://192.168.x.x:8080/video">
+    <button id="urlConfirm">✓</button>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-head">
+    <span>ZONES</span>
+    <span class="count" id="zoneCount">0/6</span>
+  </div>
+  <div id="zones"></div>
+</div>
+
+<div class="toggle-row">
+  <div class="left">
+    <span class="title">⚛&nbsp;&nbsp;Quantum audio texture</span>
+    <span class="sub">Requires internet · ANU Quantum RNG</span>
+  </div>
+  <label class="switch">
+    <input type="checkbox" id="quantumToggle">
+    <span class="slider"></span>
+  </label>
+</div>
+
+<div id="status">—</div>
+
+<!-- ---------- overlay ---------- -->
+<div id="overlay">
+  <div class="logo-dot"></div>
+  <div class="title">SONARA</div>
+  <div class="sub">assistive navigation</div>
+  <button id="beginBtn">Tap to begin</button>
+</div>
+
+<script>
+(() => {
+  // ===========================================================
+  // State
+  // ===========================================================
+  let running = false;
+  let source = 'browser_camera';
+  let ipUrl = '';
+  let cameraActive = false;
+  let cameraStream = null;
+  let backendRunning = false;
+  let scenePollTimer = null;
+  let statusPollTimer = null;
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+  const videoEl   = document.getElementById('cam');
+  const startBtn  = document.getElementById('startBtn');
+  const runDot    = document.getElementById('runDot');
+  const fpsEl     = document.getElementById('fps');
+  const zonesEl   = document.getElementById('zones');
+  const zoneCount = document.getElementById('zoneCount');
+  const statusEl  = document.getElementById('status');
+  const overlay   = document.getElementById('overlay');
+  const urlWrap   = document.getElementById('urlWrap');
+  const urlInput  = document.getElementById('urlInput');
+
+  // Zone radar scaffold — fixed order
+  const ZONE_ORDER = [
+    ['left','lower'],  ['center','lower'], ['right','lower'],
+    ['left','upper'],  ['center','upper'], ['right','upper'],
+  ];
+  const zoneRows = {};
+  for (const [z,l] of ZONE_ORDER) {
+    const key = z+'-'+l;
+    const row = document.createElement('div');
+    row.className = 'zone';
+    row.innerHTML = `
+      <div class="zone-head">
+        <span class="zone-name">${z} · ${l}</span>
+        <span class="zone-meta">
+          <span class="zone-label" style="display:none"></span>
+          <span class="zone-dist">—</span>
+        </span>
+      </div>
+      <div class="zone-bar"><div class="zone-fill"></div></div>`;
+    zonesEl.appendChild(row);
+    zoneRows[key] = {
+      label: row.querySelector('.zone-label'),
+      dist:  row.querySelector('.zone-dist'),
+      fill:  row.querySelector('.zone-fill'),
+    };
+  }
+
+  // ===========================================================
+  // Audio engine (inlined from audio_component.html)
+  // ===========================================================
+  const SMOOTH           = 0.06;
+  const VOICE_GAINS      = [0.38, 0.26, 0.18];
+  const MASTER_GAIN      = 0.4;
+  const IOS_MASTER_GAIN  = 0.75;
+  const IOS_GAIN_SCALE   = 1.35;
+  const ACTIVE_MIN       = 0.40;
+  const DANGER_HZ        = 1800;
+  const DANGER_GAIN      = 0.3;
+  const DANGER_COOLDOWN_MS = 600;
+  const QRNG_URL = 'https://qrng.anu.edu.au/API/jsonI.php?length=8&type=uint8';
+  const QRNG_REFRESH_MS = 4000;
+
+  let ctx = null;
+  let master, compressor;
+  let voices = [];
+  let dangerOsc, dangerGain;
+  let lastDanger = 0;
+  let quantumSeeds = new Float32Array(8).fill(0);
+  let quantumEnabled = false;
+  let lastQrngFetch = 0;
+  let pannerSupported = true;
+
+  function proximityToHz(p) {
+    // iPhone speakers underperform at very low frequencies.
+    if (isIOS) return 260 + p * 1700;
+    return 100 + p * 1100;
+  }
+  function zoneToPan(zone) {
+    if (zone === 'left')  return -0.85;
+    if (zone === 'right') return  0.85;
+    return 0;
+  }
+
+  async function fetchQuantumSeeds() {
+    try {
+      const r = await fetch(QRNG_URL, { cache: 'no-store' });
+      if (r.ok) {
+        const data = await r.json();
+        quantumSeeds = new Float32Array(data.data.map(v => (v/127.5) - 1.0));
+      }
+    } catch (e) {}
+  }
+
+  function initAudio() {
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    compressor = ctx.createDynamicsCompressor();
+    compressor.threshold.value = -18;
+    compressor.knee.value      = 6;
+    compressor.ratio.value     = 4;
+    compressor.attack.value    = 0.003;
+    compressor.release.value   = 0.25;
+    master = ctx.createGain();
+    master.gain.value = isIOS ? IOS_MASTER_GAIN : MASTER_GAIN;
+    compressor.connect(master).connect(ctx.destination);
+    for (let i = 0; i < 3; i++) {
+      const osc  = ctx.createOscillator();
+      const gain = ctx.createGain();
+      let pan = null;
+      if (typeof ctx.createStereoPanner === 'function') {
+        pan = ctx.createStereoPanner();
+      } else {
+        pannerSupported = false;
+      }
+      osc.type = i === 0 ? 'triangle' : 'sine';
+      osc.frequency.value = 100;
+      gain.gain.value = 0;
+      if (pan) {
+        pan.pan.value = 0;
+        osc.connect(gain).connect(pan).connect(compressor);
+      } else {
+        osc.connect(gain).connect(compressor);
+      }
+      osc.start();
+      voices.push({ osc, gain, pan });
+    }
+    dangerOsc  = ctx.createOscillator();
+    dangerGain = ctx.createGain();
+    dangerOsc.type = 'square';
+    dangerOsc.frequency.value = DANGER_HZ;
+    dangerGain.gain.value = 0;
+    dangerOsc.connect(dangerGain).connect(compressor);
+    dangerOsc.start();
+  }
+
+  function fireDanger() {
+    const now = performance.now();
+    if (now - lastDanger < DANGER_COOLDOWN_MS) return;
+    lastDanger = now;
+    const t = ctx.currentTime;
+    dangerGain.gain.cancelScheduledValues(t);
+    dangerGain.gain.setValueAtTime(0.0, t);
+    const peak = isIOS ? (DANGER_GAIN + 0.18) : DANGER_GAIN;
+    const dur = isIOS ? 0.09 : 0.055;
+    dangerGain.gain.linearRampToValueAtTime(peak, t + 0.005);
+    dangerGain.gain.linearRampToValueAtTime(0.0, t + dur);
+    triggerHaptic([200, 100, 200]);
+  }
+
+  function triggerHaptic(pattern) {
+    if (navigator.vibrate) navigator.vibrate(pattern);
+  }
+
+  async function primeAudioOutput() {
+    if (!ctx) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = isIOS ? 900 : 700;
+    gain.gain.value = 0.0;
+    osc.connect(gain).connect(compressor || ctx.destination);
+    const t = ctx.currentTime;
+    gain.gain.setValueAtTime(0.0, t);
+    gain.gain.linearRampToValueAtTime(isIOS ? 0.08 : 0.04, t + 0.01);
+    gain.gain.linearRampToValueAtTime(0.0, t + 0.08);
+    osc.start(t);
+    osc.stop(t + 0.1);
+  }
+
+  function silenceAudio() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    for (const v of voices) {
+      v.gain.gain.cancelScheduledValues(t);
+      v.gain.gain.setTargetAtTime(0, t, 0.02);
+    }
+    if (dangerGain) {
+      dangerGain.gain.cancelScheduledValues(t);
+      dangerGain.gain.setValueAtTime(0, t);
+    }
+  }
+
+  function applyScene(zones) {
+    if (!ctx) return;
+    if (!running || !backendRunning) {
+      silenceAudio();
+      return;
+    }
+    const t = ctx.currentTime;
+    const active = zones.filter(z => z.proximity > ACTIVE_MIN).slice(0, 3);
+    let danger = false;
+    for (let i = 0; i < 3; i++) {
+      const v = voices[i];
+      const z = active[i];
+      if (z) {
+        const baseHz = proximityToHz(z.proximity);
+        const wobble = quantumEnabled ? quantumSeeds[i % 8] * 15 : 0;
+        v.osc.frequency.setTargetAtTime(baseHz + wobble, t, SMOOTH);
+        if (v.pan) v.pan.pan.setTargetAtTime(zoneToPan(z.zone), t, SMOOTH);
+        const g = Math.min(0.95, VOICE_GAINS[i] * (isIOS ? IOS_GAIN_SCALE : 1));
+        v.gain.gain.setTargetAtTime(g, t, SMOOTH);
+        if (z.danger) danger = true;
+      } else {
+        v.gain.gain.setTargetAtTime(0, t, SMOOTH);
+      }
+    }
+    if (danger) fireDanger();
+  }
+
+  function updateStatus(zones) {
+    const active = zones.filter(z => z.proximity > ACTIVE_MIN).slice(0, 3);
+    const parts = active
+      .map(z => `${z.label || z.zone}-${z.level}@${z.distance_m.toFixed(1)}m`)
+      .join('  ');
+    const qLabel = quantumEnabled
+      ? (quantumSeeds.some(v => v !== 0) ? '⚛ quantum' : '⚛ fetching…')
+      : '';
+    statusEl.textContent = active.length
+      ? `${parts}  ${qLabel}`
+      : (qLabel || '—');
+  }
+
+  // ===========================================================
+  // Radar
+  // ===========================================================
+  function updateRadar(objects) {
+    const byZone = {};
+    for (const o of objects) {
+      const k = o.zone + '-' + o.level;
+      if (!byZone[k] || o.proximity > byZone[k].proximity) byZone[k] = o;
+    }
+    let active = 0;
+    for (const [z,l] of ZONE_ORDER) {
+      const key = z+'-'+l;
+      const row = zoneRows[key];
+      const o = byZone[key];
+      if (o) {
+        active++;
+        const pct = Math.min(100, Math.round(o.proximity * 100));
+        row.fill.style.width = pct + '%';
+        row.fill.style.backgroundColor =
+          o.proximity > 0.75 ? 'var(--danger)' : 'var(--accent)';
+        row.dist.textContent = o.distance_m.toFixed(1) + 'm';
+        const hasLabel = o.label && !['None','none',''].includes(o.label);
+        row.label.style.display = hasLabel ? 'inline-block' : 'none';
+        if (hasLabel) row.label.textContent = o.label;
+      } else {
+        row.fill.style.width = '0%';
+        row.dist.textContent = '—';
+        row.label.style.display = 'none';
+      }
+    }
+    zoneCount.textContent = active + '/6';
+  }
+
+  // ===========================================================
+  // Camera capture → POST /frame
+  // ===========================================================
+  const capCanvas = document.createElement('canvas');
+  capCanvas.width = 640; capCanvas.height = 480;
+  const capCtx = capCanvas.getContext('2d');
+  let sending = false;
+
+  async function sendFrame() {
+    if (!cameraActive || sending || videoEl.readyState < 2) return;
+    sending = true;
+    capCtx.drawImage(videoEl, 0, 0, 640, 480);
+    capCanvas.toBlob(async (blob) => {
+      try {
+        await fetch('/frame', {
+          method: 'POST',
+          body: blob,
+          headers: { 'Content-Type': 'image/jpeg' }
+        });
+      } catch(e) {}
+      sending = false;
+    }, 'image/jpeg', 0.7);
+  }
+
+  async function startCamera() {
+    if (cameraStream) {
+      const track = cameraStream.getVideoTracks()[0];
+      if (track && track.readyState === 'live') return true;
+      stopCamera();
+    }
+
+    const constraints = [
+      { video: { facingMode: { exact: 'environment' }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false },
+      { video: { facingMode: { ideal: 'environment' }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false },
+      { video: true, audio: false },
+    ];
+
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        statusEl.textContent = 'camera API unavailable (need https)';
+        return false;
+      }
+
+      let opened = false;
+      for (const c of constraints) {
+        try {
+          cameraStream = await navigator.mediaDevices.getUserMedia(c);
+          opened = true;
+          break;
+        } catch (e) {}
+      }
+      if (!opened || !cameraStream) {
+        statusEl.textContent = 'camera access denied/unavailable';
+        return false;
+      }
+
+      videoEl.srcObject = cameraStream;
+      await new Promise((resolve) => {
+        if (videoEl.readyState >= 2) return resolve();
+        videoEl.onloadedmetadata = () => resolve();
+      });
+      await videoEl.play().catch(() => {});
+      return true;
+    } catch (e) {
+      statusEl.textContent = 'camera start failed';
+      return false;
+    }
+  }
+
+  function stopCamera() {
+    cameraActive = false;
+    if (cameraStream) {
+      cameraStream.getTracks().forEach(t => t.stop());
+      cameraStream = null;
+      videoEl.srcObject = null;
+    }
+  }
+
+  setInterval(sendFrame, 100);
+
+  // ===========================================================
+  // Server I/O
+  // ===========================================================
+  async function sendControl(payload) {
+    try {
+      await fetch('/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    } catch (e) {}
+  }
+
+  async function pollStatus() {
+    try {
+      const s = await fetch('/status').then(r => r.json());
+      backendRunning = !!s.running;
+      fpsEl.textContent = s.running ? s.fps.toFixed(1) + ' fps' : '-- fps';
+      runDot.classList.toggle('running', s.running);
+      if (!backendRunning) silenceAudio();
+    } catch (e) {}
+  }
+
+  async function pollScene() {
+    try {
+      const d = await fetch('/static/scene.json?_=' + Date.now(),
+                            { cache: 'no-store' }).then(r => r.json());
+      quantumEnabled = !!d.quantum;
+      if (quantumEnabled && Date.now() - lastQrngFetch > QRNG_REFRESH_MS) {
+        lastQrngFetch = Date.now();
+        fetchQuantumSeeds();
+      }
+      updateRadar(d.objects || []);
+      applyScene(d.objects || []);
+      updateStatus(d.objects || []);
+    } catch (e) {}
+  }
+
+  // ===========================================================
+  // UI wiring
+  // ===========================================================
+  function setRunningUI(on) {
+    running = on;
+    startBtn.classList.toggle('running', on);
+    startBtn.innerHTML = on ? '■&nbsp;&nbsp;Stop' : '▶&nbsp;&nbsp;Start';
+    runDot.classList.toggle('running', on);
+    if (!on) silenceAudio();
+  }
+
+  startBtn.addEventListener('click', async () => {
+    if (!running) {
+      if (ctx && ctx.state !== 'running') {
+        try { await ctx.resume(); } catch (e) {}
+      }
+      if (isIOS) await primeAudioOutput();
+      if (source === 'browser_camera') {
+        const camOk = await startCamera();
+        if (!camOk) {
+          setRunningUI(false);
+          return;
+        }
+        cameraActive = true;
+      }
+      await sendControl({ action: 'start', source, url: ipUrl,
+                          quantum: document.getElementById('quantumToggle').checked });
+      setRunningUI(true);
+    } else {
+      cameraActive = false;
+      await sendControl({ action: 'stop' });
+      setRunningUI(false);
+    }
+  });
+
+  document.querySelectorAll('.pill').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.pill').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      source = btn.dataset.source;
+      urlWrap.classList.toggle('open', source === 'ip_webcam');
+      if (source !== 'browser_camera') stopCamera();
+    });
+  });
+
+  document.getElementById('urlConfirm').addEventListener('click', () => {
+    ipUrl = urlInput.value.trim();
+    if (running && source === 'ip_webcam') {
+      sendControl({ action: 'start', source, url: ipUrl });
+    }
+  });
+
+  document.getElementById('quantumToggle').addEventListener('change', (e) => {
+    sendControl({ quantum: e.target.checked });
+  });
+
+  // ===========================================================
+  // Begin overlay — one gesture: audio + camera permission
+  // ===========================================================
+  document.getElementById('beginBtn').addEventListener('click', async () => {
+    if (!ctx) initAudio();
+    if (ctx && ctx.state !== 'running') {
+      try { await ctx.resume(); } catch (e) {}
+    }
+    await primeAudioOutput();
+    triggerHaptic(50);
+    await startCamera();
+    if (ctx && ctx.state !== 'running') {
+      try { await ctx.resume(); } catch (e) {}
+    }
+    if (isIOS) await primeAudioOutput();
+    overlay.classList.add('hidden');
+    if (!scenePollTimer) scenePollTimer = setInterval(pollScene, 100);
+    if (!statusPollTimer) statusPollTimer = setInterval(pollStatus, 1000);
+    pollStatus();
+    silenceAudio();
+    if (isIOS) {
+      statusEl.textContent = 'ready (note: iOS Safari haptics support is limited)';
+    } else if (!pannerSupported) {
+      statusEl.textContent = 'ready (mono audio fallback active)';
+    } else {
+      statusEl.textContent = 'ready';
+    }
+  });
+
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState === 'visible' && ctx && ctx.state !== 'running') {
+      try { await ctx.resume(); } catch (e) {}
+    }
+  });
+})();
+</script>
+</body>
+</html>
