@@ -179,7 +179,7 @@ This is the contract shared between the Python inference pipeline and the browse
 
 - Manas Trivedi
 - Rahul Singh Jadoun
-- Acid Singh
+- Abhishek Singh
 
 ## Hackathon Note
 
