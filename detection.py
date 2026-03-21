@@ -11,6 +11,15 @@ import numpy as np
 from ultralytics import YOLO
 
 
+def _normalize_label(raw_label) -> str | None:
+    label = str(raw_label).strip()
+    if not label:
+        return None
+    if label.lower() in {"none", "null"}:
+        return None
+    return label
+
+
 class Detector:
     def __init__(self, conf_threshold: float = 0.35):
         self.model = YOLO("yolov8n.pt")  # auto-downloads on first run
@@ -34,8 +43,12 @@ class Detector:
         clss = r.boxes.cls.cpu().numpy().astype(int)
 
         for (x1, y1, x2, y2), conf, cls in zip(boxes, confs, clss):
+            label = _normalize_label(self.names[cls])
+            if label is None:
+                continue
+
             out.append({
-                "label": self.names[cls],
+                "label": label,
                 "conf": float(conf),
                 "bbox": (float(x1), float(y1), float(x2), float(y2)),
             })

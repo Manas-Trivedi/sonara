@@ -2,7 +2,7 @@
 Scene analysis: depth-map-first obstacle detection.
 
 The depth map is divided into a 3x2 grid (left/center/right x upper/lower).
-Each cell's 95th-percentile depth value becomes a proximity reading. YOLO
+Each cell's interior ROI is sampled and converted into a proximity reading. YOLO
 detections are optional context — if a detection's center falls inside a
 cell, its label is attached. If YOLO sees nothing, the grid still fires.
 
@@ -28,11 +28,53 @@ MIN_DISTANCE_M = 0.2
 
 COLS = ("left", "center", "right")
 ROWS = ("upper", "lower")
+INNER_X_MARGIN_RATIO = 0.12
+UPPER_Y_MARGIN_RATIO = 0.10
+LOWER_TOP_KEEP_RATIO = 0.62
+LOWER_BOTTOM_MARGIN_RATIO = 0.08
+
+
+def _clean_label(label) -> str | None:
+    if label is None:
+        return None
+
+    cleaned = str(label).strip()
+    if not cleaned:
+        return None
+    if cleaned.lower() in {"none", "null"}:
+        return None
+    return cleaned
 
 
 def proximity_to_meters(proximity: float) -> float:
     d = (1.0 - proximity) * MAX_DISTANCE_M
     return float(np.clip(d, MIN_DISTANCE_M, MAX_DISTANCE_M))
+
+
+def _sample_cell_for_proximity(cell: np.ndarray, level: str) -> np.ndarray:
+    """
+    Sample an interior ROI instead of the full cell.
+
+    The lower row is trimmed more aggressively so floor/ground pixels at the
+    bottom of the frame do not constantly register as near obstacles.
+    """
+    h, w = cell.shape[:2]
+    x_margin = max(1, int(w * INNER_X_MARGIN_RATIO))
+    y_margin = max(1, int(h * UPPER_Y_MARGIN_RATIO))
+
+    x1 = min(x_margin, max(0, w - 1))
+    x2 = max(x1 + 1, w - x_margin)
+
+    if level == "lower":
+        y1 = min(y_margin, max(0, h - 1))
+        y2 = max(y1 + 1, int(h * LOWER_TOP_KEEP_RATIO))
+        y2 = min(y2, max(y1 + 1, h - max(1, int(h * LOWER_BOTTOM_MARGIN_RATIO))))
+    else:
+        y1 = min(y_margin, max(0, h - 1))
+        y2 = max(y1 + 1, h - y_margin)
+
+    sample = cell[y1:y2, x1:x2]
+    return sample if sample.size else cell
 
 
 def analyze(
@@ -65,7 +107,8 @@ def analyze(
             x1, x2 = col_edges[ci], col_edges[ci + 1]
 
             cell = depth_map[y1:y2, x1:x2]
-            proximity = float(np.clip(np.percentile(cell, 95), 0.0, 1.0))
+            sample = _sample_cell_for_proximity(cell, level)
+            proximity = float(np.clip(np.percentile(sample, 90), 0.0, 1.0))
 
             zones.append({
                 "zone": zone,
@@ -80,6 +123,10 @@ def analyze(
 
     # Attach YOLO labels: detection center → containing cell.
     for det in detections:
+        label = _clean_label(det.get("label"))
+        if label is None:
+            continue
+
         bx1, by1, bx2, by2 = det["bbox"]
         cx = (bx1 + bx2) / 2.0
         cy = (by1 + by2) / 2.0
@@ -90,7 +137,7 @@ def analyze(
 
         if det["conf"] > z["_conf"]:
             z["_conf"] = det["conf"]
-            z["label"] = det["label"]
+            z["label"] = label
 
     for z in zones:
         del z["_conf"]
