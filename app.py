@@ -5,6 +5,9 @@ Streamlit entry point.
 Run:
     streamlit run app.py --server.address=0.0.0.0
 Then open http://<laptop-ip>:8501 on the PHONE browser so vibration works.
+
+Video is served as MJPEG on port 8502 so the browser pulls frames directly
+without Streamlit reruns → no flicker.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ import json
 import os
 import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import cv2
@@ -25,6 +29,7 @@ from detection import Detector
 
 # ---------------------------------------------------------------------------
 PROC_W, PROC_H = 384, 288
+MJPEG_PORT = 8502
 STATIC_DIR = Path(__file__).parent / "static"
 SCENE_JSON = STATIC_DIR / "scene.json"
 STATIC_DIR.mkdir(exist_ok=True)
@@ -96,10 +101,155 @@ def get_grabber():
 
 
 # ---------------------------------------------------------------------------
+# Shared annotated-frame buffer (written by Processor, read by MJPEG server)
+# ---------------------------------------------------------------------------
+class FrameBuffer:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._jpeg: bytes | None = None
+        self.objects: list[dict] = []
+        self.fps: float = 0.0
+        # black placeholder so /stream never blocks before first frame
+        black = np.zeros((PROC_H, PROC_W, 3), dtype=np.uint8)
+        _, buf = cv2.imencode(".jpg", black)
+        self._placeholder = buf.tobytes()
+
+    def set(self, frame_bgr: np.ndarray, objects: list[dict], fps: float):
+        _, buf = cv2.imencode(".jpg", frame_bgr,
+                              [cv2.IMWRITE_JPEG_QUALITY, 80])
+        with self._lock:
+            self._jpeg = buf.tobytes()
+            self.objects = objects
+            self.fps = fps
+
+    def get_jpeg(self) -> bytes:
+        with self._lock:
+            return self._jpeg if self._jpeg is not None else self._placeholder
+
+
+@st.cache_resource
+def get_buffer():
+    return FrameBuffer()
+
+
+# ---------------------------------------------------------------------------
+# Processing thread: grab → depth → detect → annotate → buffer + scene.json
+# ---------------------------------------------------------------------------
+class Processor:
+    def __init__(self, grabber, depth_model, detector, buffer):
+        self.grabber = grabber
+        self.depth_model = depth_model
+        self.detector = detector
+        self.buffer = buffer
+        self.running = threading.Event()
+        self._thread = None
+
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        self.running.set()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self.running.clear()
+
+    def _loop(self):
+        frame_i = 0
+        last_depth = None
+        t_prev = time.time()
+
+        while self.running.is_set():
+            raw = self.grabber.latest()
+            if raw is None:
+                time.sleep(0.05)
+                continue
+
+            frame = cv2.resize(raw, (PROC_W, PROC_H))
+
+            if frame_i % 2 == 0 or last_depth is None:
+                last_depth = self.depth_model.estimate(frame)
+            depth_map = last_depth
+
+            detections = self.detector.detect(frame)
+            objects = scene.analyze(depth_map, detections, PROC_W, PROC_H)
+
+            write_scene_json(objects)
+
+            annotated = render_annotated(frame, depth_map, objects)
+
+            now = time.time()
+            dt = now - t_prev
+            t_prev = now
+            fps = 1.0 / dt if dt > 0 else 0.0
+
+            self.buffer.set(annotated, objects, fps)
+            frame_i += 1
+
+
+@st.cache_resource
+def get_processor(_grabber, _depth, _detector, _buffer):
+    return Processor(_grabber, _depth, _detector, _buffer)
+
+
+# ---------------------------------------------------------------------------
+# MJPEG HTTP server (port 8502) — started exactly once per process
+# ---------------------------------------------------------------------------
+def _make_handler(buffer: FrameBuffer):
+    class MJPEGHandler(BaseHTTPRequestHandler):
+        def log_message(self, *a, **kw):
+            pass  # silence
+
+        def do_GET(self):
+            if self.path.split("?")[0] != "/stream":
+                self.send_error(404)
+                return
+            try:
+                self.send_response(200)
+                self.send_header(
+                    "Content-Type",
+                    "multipart/x-mixed-replace; boundary=frame")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Pragma", "no-cache")
+                self.end_headers()
+                while True:
+                    jpg = buffer.get_jpeg()
+                    self.wfile.write(b"--frame\r\n")
+                    self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                    self.wfile.write(
+                        f"Content-Length: {len(jpg)}\r\n\r\n".encode())
+                    self.wfile.write(jpg)
+                    self.wfile.write(b"\r\n")
+                    time.sleep(0.04)  # ~25 fps cap on the wire
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass
+
+    return MJPEGHandler
+
+
+@st.cache_resource
+def start_mjpeg_server(_buffer):
+    """Returns True once the server thread is running. Cached so it only
+    ever fires once no matter how many times Streamlit reruns."""
+    # Allow fast restart of the app without "address already in use"
+    ThreadingHTTPServer.allow_reuse_address = True
+    try:
+        srv = ThreadingHTTPServer(("0.0.0.0", MJPEG_PORT),
+                                  _make_handler(_buffer))
+    except OSError as e:
+        st.warning(f"MJPEG port {MJPEG_PORT} unavailable: {e}")
+        return False
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Rendering helpers
 # ---------------------------------------------------------------------------
 def render_annotated(frame_bgr, depth_map, objects):
-    """Overlay depth heatmap (40% opacity) + white bboxes + labels."""
+    """Overlay depth heatmap (40% opacity) + white bboxes + labels.
+    Returns BGR for direct JPEG encoding."""
     out = frame_bgr.copy()
 
     if depth_map is not None:
@@ -117,7 +267,7 @@ def render_annotated(frame_bgr, depth_map, objects):
         if o["danger"]:
             cv2.rectangle(out, (x1, y1), (x2, y2), (0, 0, 255), 3)
 
-    return cv2.cvtColor(out, cv2.COLOR_BGR2RGB)
+    return out
 
 
 def render_radar(objects):
@@ -162,6 +312,9 @@ def write_scene_json(objects):
 depth_model = load_depth()
 detector = load_detector()
 grabber = get_grabber()
+buffer = get_buffer()
+processor = get_processor(grabber, depth_model, detector, buffer)
+start_mjpeg_server(buffer)
 
 with st.sidebar:
     st.title("Sonara")
@@ -181,59 +334,46 @@ with st.sidebar:
 _audio_html = (Path(__file__).parent / "audio_component.html").read_text()
 components.html(_audio_html, height=80)
 
-video_slot = st.empty()
+# Video surface — persistent <img> pulling MJPEG from port 8502.
+# Hostname resolved client-side so it works from laptop *and* phone.
+components.html(
+    f"""
+    <img id="sonara-video"
+         style="width:100%;border-radius:8px;background:#000;" />
+    <script>
+      const videoEl = document.getElementById('sonara-video');
+      const parentHost = window.parent && window.parent.location
+        ? window.parent.location.hostname
+        : '';
+      const host = parentHost || window.location.hostname || 'localhost';
+      const proto = window.parent && window.parent.location
+        ? window.parent.location.protocol
+        : window.location.protocol || 'http:';
+      videoEl.src = proto + '//' + host + ':{MJPEG_PORT}/stream';
+    </script>
+    """,
+    height=320,
+)
+
 radar_slot = st.empty()
 
 # ---------------------------------------------------------------------------
-# Main loop
+# Control loop — only updates radar + FPS (~2 Hz). Video is independent.
 # ---------------------------------------------------------------------------
-if "frame_i" not in st.session_state:
-    st.session_state.frame_i = 0
-    st.session_state.last_depth = None
-    st.session_state.t_prev = time.time()
-
 if running:
     if grabber._thread is None or not grabber._thread.is_alive():
         grabber.start(url)
+    processor.start()
 
-    raw = grabber.latest()
-    if raw is None:
-        video_slot.info("Waiting for camera stream…")
-        time.sleep(0.2)
-        st.rerun()
+    radar_slot.markdown(render_radar(buffer.objects), unsafe_allow_html=True)
+    fps_slot.metric("FPS", f"{buffer.fps:.1f}")
 
-    frame = cv2.resize(raw, (PROC_W, PROC_H))
-
-    # Depth: skip every other frame, reuse previous map
-    if st.session_state.frame_i % 2 == 0 or st.session_state.last_depth is None:
-        depth_map = depth_model.estimate(frame)
-        st.session_state.last_depth = depth_map
-    else:
-        depth_map = st.session_state.last_depth
-
-    detections = detector.detect(frame)
-    objects = scene.analyze(depth_map, detections, PROC_W, PROC_H)
-
-    write_scene_json(objects)
-
-    annotated = render_annotated(frame, depth_map, objects)
-    video_slot.image(annotated, use_container_width=True)
-    radar_slot.markdown(render_radar(objects), unsafe_allow_html=True)
-
-    # FPS
-    now = time.time()
-    dt = now - st.session_state.t_prev
-    st.session_state.t_prev = now
-    fps = 1.0 / dt if dt > 0 else 0.0
-    fps_slot.metric("FPS", f"{fps:.1f}")
-
-    st.session_state.frame_i += 1
-    time.sleep(0.05)
+    time.sleep(0.5)
     st.rerun()
 
 else:
+    processor.stop()
     grabber.stop()
     write_scene_json([])  # silence audio
-    video_slot.info("Press ▶ Run in the sidebar to start.")
     radar_slot.markdown(render_radar([]), unsafe_allow_html=True)
     fps_slot.metric("FPS", "—")
