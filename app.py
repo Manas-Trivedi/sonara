@@ -39,6 +39,113 @@ STATIC_DIR.mkdir(exist_ok=True)
 st.set_page_config(page_title="Sonara", layout="wide",
                    initial_sidebar_state="expanded")
 
+# `set_page_config` must remain the first Streamlit call.
+st.markdown(
+    """
+    <style>
+    #MainMenu { visibility: hidden; }
+    footer { visibility: hidden; }
+    header { visibility: hidden; }
+    .stDeployButton { display: none; }
+    [data-testid="stToolbar"] { display: none; }
+
+    .block-container {
+        padding-top: 1rem;
+        padding-bottom: 0rem;
+        max-width: 100%;
+    }
+
+    .stApp {
+        background-color: #0a0a0a;
+        color: #ffffff;
+    }
+
+    [data-testid="stSidebar"] {
+        background-color: #111111;
+        border-right: 1px solid #222;
+    }
+
+    [data-testid="stSidebar"] .stMarkdown p,
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] .stCaption {
+        color: #888888 !important;
+        font-size: 12px;
+    }
+
+    [data-testid="stSidebar"] h1,
+    [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3 {
+        color: #ffffff !important;
+    }
+
+    [data-testid="stSidebar"] input {
+        background-color: #1a1a1a !important;
+        border: 1px solid #333 !important;
+        color: #ffffff !important;
+        border-radius: 6px !important;
+    }
+
+    [data-testid="stToggle"] label {
+        color: #cccccc !important;
+    }
+
+    .stButton button {
+        background-color: #1a1a1a;
+        border: 1px solid #333;
+        color: #ffffff;
+        border-radius: 6px;
+        transition: border-color 0.2s;
+    }
+
+    .stButton button:hover {
+        border-color: #666;
+        background-color: #222;
+    }
+
+    .stButton button[kind="primary"] {
+        background-color: #ff6600;
+        border: none;
+        color: #ffffff;
+    }
+
+    .stButton button[kind="primary"]:hover {
+        background-color: #e55a00;
+    }
+
+    hr {
+        border-color: #222 !important;
+    }
+
+    .stAlert {
+        background-color: #1a1a1a;
+        border: 1px solid #333;
+        color: #888;
+        border-radius: 6px;
+    }
+
+    [data-testid="stMetricLabel"] {
+        color: #666 !important;
+        font-size: 11px !important;
+    }
+
+    [data-testid="stMetricValue"] {
+        color: #ffffff !important;
+        font-size: 20px !important;
+    }
+
+    [data-testid="stMarkdownContainer"] p,
+    [data-testid="stCaptionContainer"] {
+        color: #9a9a9a;
+    }
+
+    [data-testid="stIFrame"] {
+        background: transparent;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 # ---------------------------------------------------------------------------
 # Model loading (cached once per process)
@@ -399,22 +506,22 @@ def render_radar(objects):
         if i < len(objects):
             o = objects[i]
             p = o["proximity"]
-            # green → yellow → red
+            # safe → warning → danger
             if p > 0.75:
-                color = "#e53935"
+                color = "#4a1a00"
             elif p > 0.45:
-                color = "#fdd835"
+                color = "#4a3a00"
             else:
-                color = "#43a047"
+                color = "#1a4a1a"
             pct = int(p * 100)
             label_name = o["label"] if o.get("label") not in (None, "", "None", "none") else f"{o['zone']}-{o['level']}"
             label = f"{label_name} — {o['distance_m']:.1f} m"
         else:
-            color, pct, label = "#333", 0, "—"
+            color, pct, label = "#1a1a1a", 0, "—"
         rows.append(
-            f'<div style="margin:4px 0;font:12px sans-serif;color:#ccc">'
+            f'<div style="margin:4px 0;font:12px sans-serif;color:#666">'
             f'{label}'
-            f'<div style="background:#222;height:16px;border-radius:3px">'
+            f'<div style="background:#1a1a1a;height:16px;border-radius:3px">'
             f'<div style="width:{pct}%;height:100%;background:{color};'
             f'border-radius:3px"></div></div></div>'
         )
@@ -440,7 +547,15 @@ processor = get_processor(video_source, depth_model, detector, buffer)
 start_mjpeg_server(buffer, video_source)
 
 with st.sidebar:
-    st.title("Sonara")
+    st.sidebar.markdown(
+        """
+        <div style="padding:0.5rem 0 1rem 0;">
+            <div style="font-size:16px;font-weight:600;color:#ffffff;">⬡ Sonara</div>
+            <div style="font-size:11px;color:#444;margin-top:2px;">assistive navigation</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     source_mode = st.radio(
         "Video Source",
         ["IP Webcam feed", "This device camera"],
@@ -485,6 +600,16 @@ st.caption(
     "Use **This device camera** when you open Sonara directly on your phone. "
     "Then switch on **Start Camera Processing** in the left sidebar. "
     "The processed video below still comes from the laptop after inference."
+)
+
+st.markdown(
+    """
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:0.5rem;">
+        <span style="font-size:22px;font-weight:600;color:#ffffff;letter-spacing:-0.5px;">Sonara</span>
+        <span style="font-size:12px;color:#444;font-family:monospace;padding:2px 8px;background:#111;border:1px solid #222;border-radius:4px;">live</span>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
 # Audio/haptic component — identical HTML every rerun so the iframe persists.
@@ -616,6 +741,10 @@ components.html(
 
 # Video surface — persistent <img> pulling MJPEG from port 8502.
 # Hostname resolved client-side so it works from laptop *and* phone.
+st.markdown(
+    '<div style="border:1px solid #1a1a1a;border-radius:8px;overflow:hidden;">',
+    unsafe_allow_html=True,
+)
 components.html(
     f"""
     <img id="sonara-video"
@@ -634,6 +763,7 @@ components.html(
     """,
     height=320,
 )
+st.markdown("</div>", unsafe_allow_html=True)
 
 radar_slot = st.empty()
 

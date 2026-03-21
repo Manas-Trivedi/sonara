@@ -33,7 +33,7 @@ That means:
 Phone camera or IP Webcam
         |
         v
-Laptop processing app (Streamlit)
+Laptop processing app (FastAPI)
   - MiDaS depth estimation
   - YOLOv8n object detection
   - 6-zone scene analysis
@@ -89,7 +89,7 @@ Phone browser audio component
 
 | Component | Purpose |
 |-----------|---------|
-| `Streamlit` | UI shell, sidebar controls, orchestration |
+| `FastAPI + Uvicorn` | HTTPS API server, control endpoints, and MJPEG stream |
 | `OpenCV` | Frame capture, resizing, annotation, MJPEG encoding |
 | `PyTorch + MiDaS` | Monocular depth estimation |
 | `Ultralytics YOLOv8n` | Object detection and labelling |
@@ -101,7 +101,8 @@ Phone browser audio component
 
 | File | Purpose |
 |------|---------|
-| `app.py` | Main Streamlit app, camera control, processing loop, MJPEG server |
+| `server.py` | Main FastAPI app, camera control, processing loop, MJPEG stream, HTTPS endpoints |
+| `static/index.html` | Mobile-first frontend UI, camera capture, audio sonification, and haptics |
 | `depth.py` | MiDaS model loading and normalized depth estimation |
 | `detection.py` | YOLOv8n wrapper and detection formatting |
 | `scene.py` | 6-zone scene analysis and danger scoring |
@@ -122,10 +123,13 @@ pip install -r requirements.txt
 ### 2. Start the app
 
 ```bash
-streamlit run app.py --server.address=0.0.0.0
+uvicorn server:app --host 0.0.0.0 --port 8501 \
+  --ssl-keyfile ./.certs/key.pem --ssl-certfile ./.certs/cert.pem
 ```
 
-Streamlit will print a local URL and a network URL. Open the **network URL** on your phone — this is required for audio and vibration to work on the actual device.
+Open `https://<laptop-ip>:8501` on your phone. Accept the self-signed certificate warning once.
+
+`server.py` auto-generates certificates into `.certs/cert.pem` and `.certs/key.pem` if missing.
 
 ### 3. Choose a video source
 
@@ -148,10 +152,10 @@ Streamlit will print a local URL and a network URL. Open the **network URL** on 
 
 For a live hackathon demo:
 
-1. Run the app on the laptop: `streamlit run app.py --server.address=0.0.0.0`
-2. Open the **network URL** on the phone browser.
-3. Tap `Enable Audio + Haptics` on the phone.
-4. Start camera processing from the sidebar.
+1. Run the app on the laptop with uvicorn and SSL enabled.
+2. Open `https://<laptop-ip>:8501` on the phone browser.
+3. Tap `Tap to begin` on the phone.
+4. Tap `Start` to begin camera processing.
 5. Move the phone toward obstacles — the judges should hear spatial cue changes clearly through earphones.
 6. Keep the laptop screen visible so judges can see the annotated zones, distances, and depth heatmap in real time.
 7. Before the judging session, enable `⚛️ Quantum audio texture` in the sidebar for the quantum RNG integration demo point.
