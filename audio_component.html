@@ -26,11 +26,18 @@
   const DANGER_GAIN      = 0.3;
   const DANGER_COOLDOWN_MS = 600;
 
+  const QRNG_URL = 'https://qrng.anu.edu.au/API/jsonI.php?length=8&type=uint8';
+  const QRNG_REFRESH_MS = 4000;  // fetch new quantum values every 4 seconds
+
   let ctx = null;
   let master, compressor;
   let voices = [];   // [{osc, gain, pan}] x3
   let dangerOsc, dangerGain;
   let lastDanger = 0;
+
+  let quantumSeeds = new Float32Array(8).fill(0);  // fallback: all zeros = no wobble
+  let quantumEnabled = false;
+  let lastQrngFetch = 0;
 
   const statusEl = document.getElementById('status');
 
@@ -42,6 +49,21 @@
     if (zone === "left")  return -0.85;
     if (zone === "right") return  0.85;
     return 0;  // center
+  }
+
+  async function fetchQuantumSeeds() {
+    try {
+      const r = await fetch(QRNG_URL, { cache: 'no-store' });
+      if (r.ok) {
+        const data = await r.json();
+        // Normalize 0-255 to -1.0 to +1.0
+        quantumSeeds = new Float32Array(
+          data.data.map(v => (v / 127.5) - 1.0)
+        );
+      }
+    } catch (e) {
+      // API unreachable — silently keep last known seeds (or zeros on first call)
+    }
   }
 
   function initAudio() {
@@ -109,7 +131,9 @@
       const v = voices[i];
       const z = active[i];
       if (z) {
-        v.osc.frequency.setTargetAtTime(proximityToHz(z.proximity), t, SMOOTH);
+        const baseHz = proximityToHz(z.proximity);
+        const wobble = quantumEnabled ? quantumSeeds[i % 8] * 15 : 0;
+        v.osc.frequency.setTargetAtTime(baseHz + wobble, t, SMOOTH);
         v.pan.pan.setTargetAtTime(zoneToPan(z.zone), t, SMOOTH);
         v.gain.gain.setTargetAtTime(VOICE_GAINS[i], t, SMOOTH);
         if (z.danger) danger = true;
@@ -120,10 +144,13 @@
 
     if (danger) fireDanger();
 
-    statusEl.textContent =
-      `active: ${active.length}/6 | ` +
-      active.map(z => `${z.label || z.zone}-${z.level}@${z.distance_m.toFixed(1)}m`)
-            .join('  ');
+    const parts = active
+      .map(z => `${z.label || z.zone}-${z.level}@${z.distance_m.toFixed(1)}m`)
+      .join('  ');
+    const qLabel = quantumEnabled
+      ? (quantumSeeds.some(v => v !== 0) ? '⚛️ quantum' : '⚛️ fetching…')
+      : '';
+    statusEl.textContent = `active: ${active.length}/6 | ${parts}  ${qLabel}`;
   }
 
   async function poll() {
@@ -132,6 +159,11 @@
                             { cache: 'no-store' });
       if (r.ok) {
         const data = await r.json();
+        quantumEnabled = !!data.quantum;
+        if (quantumEnabled && Date.now() - lastQrngFetch > QRNG_REFRESH_MS) {
+          lastQrngFetch = Date.now();
+          fetchQuantumSeeds();  // fire and forget
+        }
         applyScene(data.objects || []);
       }
     } catch (e) {

@@ -176,6 +176,7 @@ class Processor:
         self.detector = detector
         self.buffer = buffer
         self.running = threading.Event()
+        self.quantum = False
         self._thread = None
 
     def start(self):
@@ -226,7 +227,7 @@ class Processor:
             objects = scene.analyze(depth_map, detections, PROC_W, PROC_H)
             t5 = time.perf_counter()
 
-            write_scene_json(objects)
+            write_scene_json(objects, self.quantum)
             t6 = time.perf_counter()
 
             annotated = render_annotated(frame, depth_map, objects)
@@ -420,11 +421,11 @@ def render_radar(objects):
     return "".join(rows)
 
 
-def write_scene_json(objects):
+def write_scene_json(objects, quantum=False):
     """Atomic write so the JS poller never reads a half-written file."""
     tmp = SCENE_JSON.with_suffix(".tmp")
     with open(tmp, "w") as f:
-        json.dump({"objects": objects, "ts": time.time()}, f)
+        json.dump({"objects": objects, "ts": time.time(), "quantum": quantum}, f)
     os.replace(tmp, SCENE_JSON)
 
 
@@ -460,6 +461,16 @@ with st.sidebar:
     st.divider()
     st.caption("Open this page on your **phone** browser and tap "
                "**Enable Audio** below so vibration works.")
+    st.sidebar.markdown("---")
+    quantum_enabled = st.sidebar.toggle(
+        "⚛️ Quantum audio texture",
+        value=False,
+        help="Seeds oscillator micro-variation with true quantum random "
+             "numbers from ANU Quantum RNG API. Reduces listener fatigue. "
+             "Requires internet."
+    )
+
+processor.quantum = quantum_enabled
 
 if source_key == "browser_camera":
     st.warning(
