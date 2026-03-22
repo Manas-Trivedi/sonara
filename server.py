@@ -21,6 +21,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 
 import cv2
 import numpy as np
@@ -106,13 +107,81 @@ class VideoSource:
             self._thread.join(timeout=0.2)
         self._thread = None
 
+    @staticmethod
+    def _candidate_urls(url: str) -> list[str]:
+        """Try common IP Webcam MJPEG endpoints when users provide only host:port."""
+        parsed = urlparse(url)
+        candidates = [url]
+
+        if parsed.scheme and parsed.netloc:
+            base = f"{parsed.scheme}://{parsed.netloc}"
+            path = parsed.path or ""
+            query = f"?{parsed.query}" if parsed.query else ""
+
+            if path in ("", "/"):
+                candidates.extend([
+                    f"{base}/video{query}",
+                    f"{base}/videofeed{query}",
+                    f"{base}/mjpegfeed{query}",
+                    f"{base}/mjpeg{query}",
+                ])
+            elif path.rstrip("/") != "/video":
+                candidates.append(f"{base}/video{query}")
+
+        seen = set()
+        ordered = []
+        for c in candidates:
+            if c not in seen:
+                ordered.append(c)
+                seen.add(c)
+        return ordered
+
+    @staticmethod
+    def _open_capture(url: str):
+        for backend in (cv2.CAP_FFMPEG, cv2.CAP_ANY):
+            try:
+                cap = cv2.VideoCapture(url, backend)
+            except TypeError:
+                cap = cv2.VideoCapture(url)
+
+            if cap is not None and cap.isOpened():
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                return cap
+
+            if cap is not None:
+                cap.release()
+        return None
+
     def _reader_loop(self):
-        self._cap = cv2.VideoCapture(self._url)
+        urls = self._candidate_urls(self._url or "")
+        if not urls:
+            return
+
+        url_i = 0
+        failed_reads = 0
+
         while not self._stop.is_set():
+            if self._cap is None:
+                self._cap = self._open_capture(urls[url_i])
+                if self._cap is None:
+                    url_i = (url_i + 1) % len(urls)
+                    time.sleep(0.25)
+                    continue
+
             ok, f = self._cap.read()
-            if not ok:
-                time.sleep(0.05)
+            if not ok or f is None or f.size == 0:
+                failed_reads += 1
+                if failed_reads >= 12:
+                    self._cap.release()
+                    self._cap = None
+                    failed_reads = 0
+                    url_i = (url_i + 1) % len(urls)
+                    time.sleep(0.1)
+                else:
+                    time.sleep(0.03)
                 continue
+
+            failed_reads = 0
             with self._lock:
                 self._frame = f
 
