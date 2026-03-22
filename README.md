@@ -16,17 +16,6 @@ Built by team `Zombie` for a hackathon sprint, Sonara is intentionally optimized
 - Optionally seeds oscillator micro-variation with true quantum random numbers to reduce listener fatigue.
 - Streams an annotated output feed for easier debugging and judging.
 
-## Why The Current Version Is Better
-
-The older prototype focused on only a few detected objects. The current build is more reliable for obstacle awareness because depth drives the experience first, and detection labels are layered on top when available.
-
-That means:
-
-- Sonara still reacts when YOLO sees nothing.
-- The user gets consistent left/center/right and upper/lower guidance.
-- Nearby walls, furniture, and unlabelled obstacles can still trigger warnings.
-- The demo is easier to explain because every part of the frame maps to a zone.
-
 ## How It Works
 
 ```text
@@ -147,18 +136,6 @@ Open `https://<laptop-ip>:8501` on your phone. Accept the self-signed certificat
 - Toggle on `Start Camera Processing` and allow camera access when prompted.
 
 > Note: many mobile browsers require HTTPS or localhost for direct camera access. If plain `http://` does not work, use the IP Webcam route instead.
-
-## Demo Flow
-
-For a live hackathon demo:
-
-1. Run the app on the laptop with uvicorn and SSL enabled.
-2. Open `https://<laptop-ip>:8501` on the phone browser.
-3. Tap `Tap to begin` on the phone.
-4. Tap `Start` to begin camera processing.
-5. Move the phone toward obstacles — the judges should hear spatial cue changes clearly through earphones.
-6. Keep the laptop screen visible so judges can see the annotated zones, distances, and depth heatmap in real time.
-7. Before the judging session, enable `⚛️ Quantum audio texture` in the sidebar for the quantum RNG integration demo point.
 
 ## Current Output Format
 
