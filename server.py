@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import socket
 import subprocess
 import threading
 import time
@@ -363,6 +364,22 @@ ensure_self_signed_cert()
 
 
 # ---------------------------------------------------------------------------
+# Get local IP address for easy mobile access
+# ---------------------------------------------------------------------------
+def get_local_ip():
+    """Get the laptop's local IP address."""
+    try:
+        # Connect to a remote host to determine local IP
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "localhost"
+
+
+# ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
 video_source = VideoSource()
@@ -379,7 +396,8 @@ async def lifespan(app: FastAPI):
     detector = Detector()
     processor = Processor(video_source, depth_model, detector, buffer)
     write_scene_json([])
-    print("Ready.", flush=True)
+    ip = get_local_ip()
+    print(f"Ready. Open this URL on your phone:\n  ➜ https://{ip}:8501", flush=True)
     yield
     processor.stop()
     video_source.stop()

@@ -66,6 +66,16 @@
     }
   }
 
+  function makePan() {
+    if (ctx.createStereoPanner) {
+      return { node: ctx.createStereoPanner(), ios: false };
+    }
+    const p = ctx.createPanner();
+    p.panningModel = 'equalpower';
+    p.setPosition(0, 0, 1);
+    return { node: p, ios: true };
+  }
+
   function initAudio() {
     ctx = new (window.AudioContext || window.webkitAudioContext)();
 
@@ -86,14 +96,15 @@
     for (let i = 0; i < 3; i++) {
       const osc  = ctx.createOscillator();
       const gain = ctx.createGain();
-      const pan  = ctx.createStereoPanner();
+      const panObj = makePan();
+      const pan = panObj.node;
       osc.type = i === 0 ? 'triangle' : 'sine';
       osc.frequency.value = 100;
       gain.gain.value = 0;
       pan.pan.value = 0;
       osc.connect(gain).connect(pan).connect(compressor);
       osc.start();
-      voices.push({ osc, gain, pan });
+      voices.push({ osc, gain, pan: panObj.node, panIos: panObj.ios });
     }
 
     // Danger click (square), unpanned, routed directly to compressor
@@ -134,7 +145,12 @@
         const baseHz = proximityToHz(z.proximity);
         const wobble = quantumEnabled ? quantumSeeds[i % 8] * 15 : 0;
         v.osc.frequency.setTargetAtTime(baseHz + wobble, t, SMOOTH);
-        v.pan.pan.setTargetAtTime(zoneToPan(z.zone), t, SMOOTH);
+        if (v.panIos) {
+          const p = zoneToPan(z.zone);
+          v.pan.setPosition(p, 0, 1 - Math.abs(p));
+        } else {
+          v.pan.pan.setTargetAtTime(zoneToPan(z.zone), t, SMOOTH);
+        }
         v.gain.gain.setTargetAtTime(VOICE_GAINS[i], t, SMOOTH);
         if (z.danger) danger = true;
       } else {
